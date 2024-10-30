@@ -1,109 +1,106 @@
 import os
+import cv2
 import json
 import torch
+import csv
+import pandas as pd
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms, utils
+import pdb
+import time
 from PIL import Image
-import soundfile as sf
+import glob
+import sys 
+import scipy.io.wavfile as wav
+from scipy import signal
 import random
-import matplotlib.pyplot as plt
-from IPython.display import Audio
-from torchvision import transforms
+import soundfile as sf
 
-# PlacesAudio Dataset
-class PlacesAudioDataset(Dataset):
-    def __init__(self, json_file, image_base_path, audio_base_path, transform=None):
-        self.transform = transform
-        self.image_base_path = image_base_path
-        self.audio_base_path = audio_base_path
-        
-        # JSON 파일 읽기
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        
-        self.data = data['data']
-    
+
+
+class GetAudioVideoDataset(Dataset):
+
+    def __init__(self, args, mode='train', transforms=None):
+ 
+        data = []
+        if args.testset == 'flickr':
+            testcsv = 'metadata/flickr_test.csv'
+        elif args.testset == 'vggss':
+            testcsv = 'metadata/vggss_test.csv'
+
+        with open(testcsv) as f:
+            csv_reader = csv.reader(f)
+            for item in csv_reader:
+                data.append(item[0] + '.mp4')
+        self.audio_path = args.data_path + 'audio/'
+        self.video_path = args.data_path + 'frames/'
+
+        self.imgSize = args.image_size 
+
+        self.mode = mode
+        self.transforms = transforms
+        # initialize video transform
+        self._init_atransform()
+        self._init_transform()
+        #  Retrieve list of audio and video files
+        self.video_files = []
+   
+        for item in data[:]:
+            self.video_files.append(item )
+        print(len(self.video_files))
+        self.count = 0
+
+    def _init_transform(self):
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+        if self.mode == 'train':
+            self.img_transform = transforms.Compose([
+                transforms.Resize(int(self.imgSize * 1.1), Image.BICUBIC),
+                transforms.RandomCrop(self.imgSize),
+                transforms.RandomHorizontalFlip(),
+                transforms.CenterCrop(self.imgSize),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std)])
+        else:
+            self.img_transform = transforms.Compose([
+                transforms.Resize(self.imgSize, Image.BICUBIC),
+                transforms.CenterCrop(self.imgSize),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std)])            
+
+    def _init_atransform(self):
+        self.aid_transform = transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean=[0.0], std=[12.0])])
+#  
+
+    def _load_frame(self, path):
+        img = Image.open(path).convert('RGB')
+        return img
+
     def __len__(self):
-        return len(self.data)
-    
+        # Consider all positive and negative examples
+        return len(self.video_files)  # self.length
+
     def __getitem__(self, idx):
-        item = self.data[idx]
-        
-        # 이미지 경로 설정
-        image_path = os.path.join(self.image_base_path, item['image'])
-        image = Image.open(image_path)
-        if self.transform:
-            image = self.transform(image)
-        
-        # 오디오 경로 설정
-        audio_path = os.path.join(self.audio_base_path, item['wav'])
-        audio, sr = sf.read(audio_path)
-        
-        return image, audio, sr
+        file = self.video_files[idx]
 
-# VGGSound Dataset
-class VGGSoundDataset(Dataset):
-    def __init__(self, json_file, base_path, transform=None):
-        self.transform = transform
-        self.base_path = base_path
-        
-        # JSON 파일 읽기
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        
-        self.data = data['data']
-    
-    def __len__(self):
-        return len(self.data)
-    
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        
-        # 랜덤 프레임 선택 (0~9 중 랜덤 선택)
-        frame_id = random.randint(0, 9)
-        frame_path = os.path.join(self.base_path, item['video_path'], f'frame_{frame_id}.jpg')
-        image = Image.open(frame_path)
-        if self.transform:
-            image = self.transform(image)
-        
-        # 오디오 경로 설정
-        audio_path = os.path.join(self.base_path, item['wav'])
-        audio, sr = sf.read(audio_path)
-        
-        return image, audio, sr
+        # Image
+        frame = self.img_transform(self._load_frame(self.video_path + file[:-3] + 'jpg'))
+        frame_ori = np.array(self._load_frame(self.video_path  + file[:-3] + 'jpg'))
+        # Audio
+        samples, samplerate = sf.read(self.audio_path + file[:-3]+'wav')
 
-# 이미지 및 오디오 시각화 함수
-def visualize(image, audio, sr):
-    plt.imshow(image)
-    plt.axis('off')
-    plt.show()
-    
-    display(Audio(audio, rate=sr))
+        # repeat if audio is too short
+        if samples.shape[0] < samplerate * 10:
+            n = int(samplerate * 10 / samples.shape[0]) + 1
+            samples = np.tile(samples, n)
+        resamples = samples[:samplerate*10]
 
-# Dataloader 설정 (PlacesAudio)
-placesaudio_dataset = PlacesAudioDataset(
-    json_file='/path/to/val.json',
-    image_base_path='/path/to/images',
-    audio_base_path='/path/to/audios',
-    transform=transforms.ToTensor()
-)
+        resamples[resamples > 1.] = 1.
+        resamples[resamples < -1.] = -1.
+        frequencies, times, spectrogram = signal.spectrogram(resamples,samplerate, nperseg=512,noverlap=274)
+        spectrogram = np.log(spectrogram+ 1e-7)
+        spectrogram = self.aid_transform(spectrogram)
+ 
 
-placesaudio_loader = DataLoader(placesaudio_dataset, batch_size=1, shuffle=True)
-
-# Dataloader 설정 (VGGSound)
-vggsound_dataset = VGGSoundDataset(
-    json_file='/path/to/test.json',
-    base_path='/path/to/dataset',
-    transform=transforms.ToTensor()
-)
-
-vggsound_loader = DataLoader(vggsound_dataset, batch_size=1, shuffle=True)
-
-# PlacesAudio 데이터셋 시각화
-for image, audio, sr in placesaudio_loader:
-    visualize(image.squeeze(0).permute(1, 2, 0), audio, sr)
-    break
-
-# VGGSound 데이터셋 시각화
-for image, audio, sr in vggsound_loader:
-    visualize(image.squeeze(0).permute(1, 2, 0), audio, sr)
-    break
+        return frame,spectrogram,resamples,file,torch.tensor(frame_ori)
