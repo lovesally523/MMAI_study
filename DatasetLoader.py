@@ -17,90 +17,80 @@ from scipy import signal
 import random
 import soundfile as sf
 
-
-
 class GetAudioVideoDataset(Dataset):
 
     def __init__(self, args, mode='train', transforms=None):
- 
-        data = []
-        if args.testset == 'flickr':
-            testcsv = 'metadata/flickr_test.csv'
-        elif args.testset == 'vggss':
-            testcsv = 'metadata/vggss_test.csv'
 
-        with open(testcsv) as f:
-            csv_reader = csv.reader(f)
-            for item in csv_reader:
-                data.append(item[0] + '.mp4')
-        self.audio_path = args.data_path + 'audio/'
-        self.video_path = args.data_path + 'frames/'
-
+        with open(args.json_file, 'r') as f:
+            self.data = json.load(f)['data']
+        
         self.imgSize = args.image_size 
-
         self.mode = mode
         self.transforms = transforms
+
         # initialize video transform
-        self._init_atransform()
-        self._init_transform()
+        self._init_atransform()  # audio spectrogram의 텐서화 및 정규화를 수행
+        self._init_transform() # image 변환 작업을 수행
         #  Retrieve list of audio and video files
-        self.video_files = []
-   
-        for item in data[:]:
-            self.video_files.append(item )
-        print(len(self.video_files))
-        self.count = 0
 
     def _init_transform(self):
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        if self.mode == 'train':
+
+        if self.mode == 'train': # 훈련 모드
             self.img_transform = transforms.Compose([
-                transforms.Resize(int(self.imgSize * 1.1), Image.BICUBIC),
-                transforms.RandomCrop(self.imgSize),
-                transforms.RandomHorizontalFlip(),
-                transforms.CenterCrop(self.imgSize),
+                transforms.Resize(int(self.imgSize * 1.1), Image.BICUBIC), # image를 self.imgSize의 1.1배 크기로 확대
+                transforms.RandomCrop(self.imgSize), # random crop을 통해 image의 일부분을 임의로 자름
+                transforms.RandomHorizontalFlip(), # 50% 확률로 image를 좌우로 뒤집어 데이터 다양성을 더함.
+                transforms.CenterCrop(self.imgSize), # 중앙 부분을 잘라냄
                 transforms.ToTensor(),
-                transforms.Normalize(mean, std)])
-        else:
+                transforms.Normalize(mean, std)]) # 텐서로 변환 후 정규화
+        else: # test 모드
             self.img_transform = transforms.Compose([
                 transforms.Resize(self.imgSize, Image.BICUBIC),
                 transforms.CenterCrop(self.imgSize),
                 transforms.ToTensor(),
-                transforms.Normalize(mean, std)])            
+                transforms.Normalize(mean, std)]) # 텐서로 변환 후 정규화           
 
     def _init_atransform(self):
         self.aid_transform = transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean=[0.0], std=[12.0])])
+        # audio spectrogram data를 tensor 형식으로 변환. -> 표준 편차를 12.0으로 설정하여 정규화
 #  
 
     def _load_frame(self, path):
-        img = Image.open(path).convert('RGB')
+        img = Image.open(path).convert('RGB') # 주어진 경로에서 image를 읽고 RGB로 변환하여 반환
         return img
 
     def __len__(self):
         # Consider all positive and negative examples
-        return len(self.video_files)  # self.length
+        return len(self.data)  # self.length
 
     def __getitem__(self, idx):
-        file = self.video_files[idx]
+        # json file에서 audio & video path 가져오기
+        item = self.data[idx]
+        video_id = item['video_id']
+        audio_path = f"/mnt/scratch/users/sally/VGGsound_individual/test/sample_audio/{video_id}.wav"
+        video_path = f"/mnt/scratch/users/sally/VGGsound_individual/test/sample_frames/frame_4/{video_id}.jpg"
 
-        # Image
-        frame = self.img_transform(self._load_frame(self.video_path + file[:-3] + 'jpg'))
-        frame_ori = np.array(self._load_frame(self.video_path  + file[:-3] + 'jpg'))
-        # Audio
-        samples, samplerate = sf.read(self.audio_path + file[:-3]+'wav')
+        # image load 및 전처리
+        frame = self.img_transform(self._load_frame(video_path))
+        frame_ori = np.array(self._load_frame(video_path))
+        
+        # 오디오 로드 및 전처리
+        samples, samplerate = sf.read(audio_path)
 
-        # repeat if audio is too short
+
+        # repeat if audio is too short -> audio 길이가 10초에 미치지 못하면, 필요한 길이만큼 반복하여 samples를 확장
         if samples.shape[0] < samplerate * 10:
             n = int(samplerate * 10 / samples.shape[0]) + 1
             samples = np.tile(samples, n)
-        resamples = samples[:samplerate*10]
+        resamples = samples[:samplerate*10] # samples에서 정확히 10초를 잘라내어 resamples에 저장
 
         resamples[resamples > 1.] = 1.
         resamples[resamples < -1.] = -1.
-        frequencies, times, spectrogram = signal.spectrogram(resamples,samplerate, nperseg=512,noverlap=274)
-        spectrogram = np.log(spectrogram+ 1e-7)
-        spectrogram = self.aid_transform(spectrogram)
+        frequencies, times, spectrogram = signal.spectrogram(resamples,samplerate, nperseg=512,noverlap=274) # audio spectrogram을 생성
+        spectrogram = np.log(spectrogram+ 1e-7) # spectrogram의 값을 log scale로 변환 -> spectrogram에 저장
+        spectrogram = self.aid_transform(spectrogram) # spectrogram data를 tensor로 변환하고 정규화
  
 
-        return frame,spectrogram,resamples,file,torch.tensor(frame_ori)
+        return frame,spectrogram,resamples,video_id,torch.tensor(frame_ori)

@@ -77,3 +77,21 @@ class AVENet(nn.Module):
             logits = torch.cat((sim1,sim),1)/0.07
         
         return A,logits,Pos,Neg
+
+
+    # feature extraction function 구현
+    def extract_features(self, image, audio):
+        """
+        Returns intermediate image and audio features without calculating logits or other outputs.
+        """
+        with torch.no_grad():
+            # Extract features from image and audio networks
+            image_feature = self.imgnet(image)  # Intermediate image features
+            audio_feature = self.audnet(audio)  # Intermediate audio features
+            
+            # Normalize the features if needed
+            image_feature = nn.functional.normalize(image_feature, dim=1)
+            audio_feature = self.avgpool(audio_feature).view(audio_feature.size(0), -1)
+            audio_feature = nn.functional.normalize(audio_feature, dim=1)
+
+        return image_feature, audio_feature

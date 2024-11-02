@@ -32,23 +32,28 @@ def conv1x1(in_planes, out_planes, stride=1):
 
 
 class BasicBlock(nn.Module):
+    # ResNet model의 기본 블록을 구현
+
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
                  base_width=64, dilation=1, norm_layer=None):
+        # inplanes : 입력 채널 수 / planes : 출력 채널 수
+        # downsample : block 내에서 downsampling 할지 여부를 결정하는 모듈
+        # groups : 필터 그룹 수, base_width : 기본 너비
         super(BasicBlock, self).__init__()
         if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
+            norm_layer = nn.BatchNorm2d # 기본으로 nn.BatchNorm2d를 사용
         if groups != 1 or base_width != 64:
             raise ValueError('BasicBlock only supports groups=1 and base_width=64')
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
         self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = norm_layer(planes)
+        self.bn1 = norm_layer(planes) # batch normalization -> 출력값의 분포를 정규화
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
-        self.bn2 = norm_layer(planes)
+        self.bn2 = norm_layer(planes) # batch normalization 
         self.downsample = downsample
         self.stride = stride
 
@@ -72,10 +77,16 @@ class BasicBlock(nn.Module):
 
 
 class Bottleneck(nn.Module):
+    # ResNet 아키텍처에서 사용되는 bottleneck block을 구현
+    # 입력 tensor를 downsample하고 upsample하여 residual connection을 가능하게 함.
     expansion = 4
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
                  base_width=64, dilation=1, norm_layer=None):
+        # inplanes : 입력 채널 수 / planes : 중간 채널 수
+        # downsample : 입력과 출력의 크기가 다를 때 이를 맞추기 위한 모듈
+        # groups : 필터 그룹 수 / base_width : 기본 너비 / dilation : 필터의 확장 계수
+
         super(Bottleneck, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -115,10 +126,14 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
+    # ResNet model을 정의. 
+    # residual learning 을 통해 깊은 network에서도 성능을 유지하도록 설계됨
 
     def __init__(self, block, layers, modal, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
+        # block : network를 구성하는 block 유형(BasicBlock or Bottleneck)
+        # layers : 각 layer에 포함된 block의 수를 지정
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -173,6 +188,7 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn2.weight, 0)
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
+        # ResNet의 각 layer를 구성하는 block들을 생성하는 함수
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
@@ -218,6 +234,8 @@ class ResNet(nn.Module):
 
 
 def _resnet(arch, block, layers, pretrained, progress, modal, **kwargs):
+    # layers : layer별 block 개수를 나타내는 리스트
+    # **kwargs : 기타 추가적인 인수를 받아서 전달
     model = ResNet(block, layers, modal, **kwargs)
     #  if pretrained:
         #  print('load pretrained res-18')

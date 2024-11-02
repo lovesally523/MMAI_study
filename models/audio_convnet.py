@@ -11,9 +11,10 @@ from scipy import ndimage
 
 
 class AudioConvNet(nn.Module):
-
+    # audio data 전처리 및 분석을 위한 CNN 기반 network
     def __init__(self):
         super(AudioConvNet, self).__init__()
+        # conv 및 batch normalization 층
         self.pool = nn.MaxPool2d(2, stride=2)
 
         self.cnn1 = nn.Conv2d(1, 64, 3, stride=2, padding=1)
@@ -36,16 +37,17 @@ class AudioConvNet(nn.Module):
         self.bat40 = nn.BatchNorm2d(512)
         self.bat41 = nn.BatchNorm2d(512)
 
-        for m in self.modules():
+        for m in self.modules(): # model의 모든 sub 층을 돌면서 정규화
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 #  nn.init.normal_(m.weight, mean=1, std=0.02)
                 #  nn.init.normal_(m.weight, mean=0, std=0.2)
-            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)): # batch 정규화와 그룹 정규화
                 nn.init.normal_(m.weight, mean=1, std=0.02)
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, inp):
+        # 순차적으로 CNN -> batch normalization -> activation(ReLU) -> pooling을 거침
         c = F.relu(self.bat10(self.cnn1(inp)))
         c = F.relu(self.bat11(self.cnn2(c)))
         c = self.pool(c)
@@ -61,10 +63,11 @@ class AudioConvNet(nn.Module):
         c = F.relu(self.bat40(self.cnn7(c)))
         c = F.relu(self.bat41(self.cnn8(c)))
 
-        return c
+        return c # 512 채널을 가진 feature map
 
     # Dummy function, just to test if feedforward is working or not
     def loss(self, output):
+        # model의 출력을 사용하여 loss를 계산
         return (output.mean())**2
 
 
@@ -78,11 +81,11 @@ if __name__ == "__main__":
     # Run some sample epochs to see if everything's working
     optim = SGD(model.parameters(), lr=1e-4)
     for i in range(100):
-        optim.zero_grad()
+        optim.zero_grad() # 이전에 계산된 모든 기울기를 초기화 
         c = model(image)
         print(c.shape)
         print(image.shape)
-        loss = model.loss(c)
-        loss.backward()
+        loss = model.loss(c) # 출력 c의 손실을 계산
+        loss.backward() # 손실에 대한 기울기를 계산하여 역전파
         optim.step()
         print(loss.data[0])

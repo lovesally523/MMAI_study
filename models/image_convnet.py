@@ -11,10 +11,11 @@ from scipy import ndimage
 
 
 class ImageConvNet(nn.Module):
+    # 2D 합성곱 신경망을 정의
 
     def __init__(self):
         super(ImageConvNet, self).__init__()
-        self.pool = nn.MaxPool2d(2, stride=2)
+        self.pool = nn.MaxPool2d(2, stride=2) # tensor의 크기를 절반으로 줄임
 
         self.cnn1 = nn.Conv2d(3, 64, 3, stride=2, padding=1)
         self.cnn2 = nn.Conv2d(64, 64, 3, padding=1)
@@ -50,7 +51,7 @@ class ImageConvNet(nn.Module):
     def forward(self, inp):
         c = F.relu(self.bat10(self.cnn1(inp)))
         c = F.relu(self.bat11(self.cnn2(c)))
-        c = self.pool(c)
+        c = self.pool(c) # tensor의 크기 절반으로 줄임
 
         c = F.relu(self.bat20(self.cnn3(c)))
         c = F.relu(self.bat21(self.cnn4(c)))
@@ -73,6 +74,7 @@ if __name__ == "__main__":
     model = ImageConvNet().cuda()
     print("Model loaded.")
     image = Variable(torch.rand(2, 3, 224, 224)).cuda()
+    # 2개의 RGB 채널을 가진 224x224 크기의 가상 이미지 생성
     print("Image loaded.")
 
     # Run a feedforward and check shape
