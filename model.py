@@ -86,10 +86,14 @@ class AVENet(nn.Module):
         """
         with torch.no_grad():
             # Extract features from image and audio networks
+            image = image.float()
+            audio = audio.float()
+
             image_feature = self.imgnet(image)  # Intermediate image features
             audio_feature = self.audnet(audio)  # Intermediate audio features
             
             # Normalize the features if needed
+            image_feature = self.avgpool(image_feature).view(image_feature.size(0), -1)
             image_feature = nn.functional.normalize(image_feature, dim=1)
             audio_feature = self.avgpool(audio_feature).view(audio_feature.size(0), -1)
             audio_feature = nn.functional.normalize(audio_feature, dim=1)

@@ -5,46 +5,61 @@ import time
 import numpy as np
 
 import torch
+import json
 import torch.nn.functional as F
 from torch import multiprocessing as mp
 import torch.distributed as dist
 
 import utils
 from model import AVENet
-from datasets import get_train_dataset, get_test_dataset
+from DatasetLoader import GetAudioVideoDataset
+from tqdm import tqdm
 
+# from datasets import get_train_dataset, get_test_dataset
+from torch.utils.tensorboard import SummaryWriter
+
+
+
+import argparse
 
 def get_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_dir', type=str, default='./checkpoints', help='path to save trained model weights')
-    parser.add_argument('--experiment_name', type=str, default='hdvsl_vggss', help='experiment name (used for checkpointing and logging)')
+    
+    # Model and experiment configurations
+    parser.add_argument('--model_dir', type=str, default='./checkpoints', help='Directory to save model checkpoints')
+    parser.add_argument('--experiment_name', type=str, default='hdvsl_vggss', help='Experiment name for checkpointing and logging')
 
-    # Data params
-    parser.add_argument('--trainset', default='vggss', type=str, help='trainset (flickr or vggss)')
-    parser.add_argument('--testset', default='vggss', type=str, help='testset,(flickr or vggss)')
-    parser.add_argument('--train_data_path', default='', type=str, help='Root directory path of train data')
-    parser.add_argument('--test_data_path', default='', type=str, help='Root directory path of test data')
-    parser.add_argument('--test_gt_path', default='', type=str)
+    # Dataset paths and configurations
+    parser.add_argument('--trainset', type=str, default='vggss', help='Name of the training dataset (e.g., flickr, vggss)')
+    parser.add_argument('--testset', type=str, default='vggss', help='Name of the test dataset (e.g., flickr, vggss)')
+    parser.add_argument('--image_size',default=224,type=int,help='Height and width of inputs')
 
-    # hd -vsl hyper-params
-    # parser.add_argument('--out_dim', default=512, type=int)
-    # parser.add_argument('--tau', default=0.03, type=float, help='tau')
+    # Model hyperparameters as used in AVENet class
+    parser.add_argument('--epsilon', type=float, default=0.65, help='Threshold for positive cases in similarity calculation')
+    parser.add_argument('--epsilon2', type=float, default=0.4, help='Threshold for negative cases in similarity calculation')
+    # epsilon이랑 epsilon2 필요한지 아직 잘 모르겠음. (positive, negative 하지 말라는 것 같았음)
 
-    # training/evaluation parameters
-    parser.add_argument("--epochs", type=int, default=20, help="number of epochs")
-    parser.add_argument('--batch_size', default=128, type=int, help='Batch Size')
-    parser.add_argument("--init_lr", type=float, default=0.0001, help="initial learning rate")
-    parser.add_argument("--seed", type=int, default=12345, help="random seed")
+    parser.add_argument('--tri_map', action='store_true', help='Use tri-map for additional negative cases')
+    parser.set_defaults(tri_map=True)
+    parser.add_argument('--Neg', action='store_true', help='Include negative samples in similarity calculation')
+    parser.set_defaults(Neg=True)
+    parser.add_argument('--random_threshold', type=float, default=0.03, help='Threshold for random sampling (if used)')
 
-    # Distributed params
-    parser.add_argument('--workers', type=int, default=8)
-    parser.add_argument('--gpu', type=int, default=None)
-    parser.add_argument('--world_size', type=int, default=1)
-    parser.add_argument('--rank', type=int, default=0)
-    parser.add_argument('--node', type=str, default='localhost')
-    parser.add_argument('--port', type=int, default=12345)
-    parser.add_argument('--dist_url', type=str, default='tcp://localhost:12345')
-    parser.add_argument('--multiprocessing_distributed', action='store_true')
+    # Training parameters
+    parser.add_argument('--epochs', type=int, default=20, help='Total number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training')
+    parser.add_argument('--init_lr', type=float, default=0.0001, help='Initial learning rate')
+    parser.add_argument('--seed', type=int, default=12345, help='Random seed for reproducibility')
+
+    # Distributed training parameters
+    parser.add_argument('--workers', type=int, default=8, help='Number of workers for data loading')
+    parser.add_argument('--gpu', type=int, default=None, help='GPU id to use')
+    parser.add_argument('--world_size', type=int, default=1, help='Total number of nodes for distributed training')
+    parser.add_argument('--rank', type=int, default=0, help='Node rank for distributed training')
+    parser.add_argument('--node', type=str, default='localhost', help='Node hostname')
+    parser.add_argument('--port', type=int, default=12345, help='Port for distributed training communication')
+    parser.add_argument('--dist_url', type=str, default='tcp://localhost:12345', help='URL for distributed training')
+    parser.add_argument('--multiprocessing_distributed', action='store_true', help='Use multi-processing distributed training')
 
     return parser.parse_args()
 
@@ -76,7 +91,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
-
+        
     # Setup distributed environment
     if args.multiprocessing_distributed:
         if args.dist_url == "env://" and args.rank == -1:
@@ -127,20 +142,30 @@ def main_worker(gpu, ngpus_per_node, args):
         print(f'loaded from {os.path.join(model_dir, "latest.pth")}')
 
     # Dataloaders
-    traindataset = get_train_dataset(args)
+    # traindataset = get_train_dataset(args)
+    traindataset = GetAudioVideoDataset(args, mode = 'train')
     train_sampler = None
     if args.multiprocessing_distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(traindataset)
-    train_loader = torch.utils.data.DataLoader(
-        traindataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=False, sampler=train_sampler, drop_last=True,
-        persistent_workers=args.workers > 0)
+    train_loader = torch.utils.data.DataLoader(traindataset, batch_size= args.batch_size, shuffle = (train_sampler is None), num_workers = 16)
+    
+    # train_sampler = None
+    # if args.multiprocessing_distributed:
+    #     train_sampler = torch.utils.data.distributed.DistributedSampler(traindataset)
+    # train_loader = torch.utils.data.DataLoader(
+    #     traindataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+    #     num_workers=args.workers, pin_memory=False, sampler=train_sampler, drop_last=True,
+    #     persistent_workers=args.workers > 0)
 
-    testdataset = get_test_dataset(args)
-    test_loader = torch.utils.data.DataLoader(
-        testdataset, batch_size=1, shuffle=False,
-        num_workers=args.workers, pin_memory=False, drop_last=False,
-        persistent_workers=args.workers > 0)
+    # testdataset = get_test_dataset(args)
+    # test_loader = torch.utils.data.DataLoader(
+    #     testdataset, batch_size=1, shuffle=False,
+    #     num_workers=args.workers, pin_memory=False, drop_last=False,
+    #     persistent_workers=args.workers > 0)
+
+    testdataset = GetAudioVideoDataset(args,  mode='test')
+    test_loader = torch.utils.data.DataLoader(testdataset, batch_size=1, shuffle=False, num_workers = 1)
+
     print("Loaded dataloader.")
 
     # =============================================================== #
@@ -180,6 +205,18 @@ def main_worker(gpu, ngpus_per_node, args):
                 torch.save(ckp, os.path.join(model_dir, 'best.pth'))
 
 
+def load_labels():
+    with open("/mnt/scratch/users/individuals/VGGsound_individual/metadata/test.json", 'r') as f:
+        full_data = json.load(f)  # JSON 파일 전체를 로드
+        data = full_data["data"]  # "data" 키를 통해 실제 데이터에 접근
+
+    labels = {}
+    for item in data:
+        labels[item['video_id']] = item['labels']
+    
+    return labels
+
+
 def train(train_loader, model, optimizer, epoch, args):
     model.train()
     batch_time = AverageMeter('Time', ':6.3f')
@@ -193,17 +230,17 @@ def train(train_loader, model, optimizer, epoch, args):
     )
 
     end = time.time()
-    for i, (image, spec, _, _) in enumerate(train_loader):
+    for i, (image, spec, _, _,_) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
-        if args.gpu is not None:
-            spec = spec.cuda(args.gpu, non_blocking=True)
-            image = image.cuda(args.gpu, non_blocking=True)
+        #if args.gpu is not None:
+        spec = spec.cuda()
+        image = image.cuda()
 
         image_emb, audio_emb = model.extract_features(image, spec)
         similarity_matrix = torch.mm(image_emb, audio_emb.T)
 
-        labels = torch.arange(similarity_matrix.size(0)).long().cuda(args.gpu)
+        labels = torch.arange(similarity_matrix.size(0)).long().cuda()
         loss = F.cross_entropy(similarity_matrix, labels)
         
         loss_mtr.update(loss.item(), image.shape[0])
@@ -221,37 +258,166 @@ def train(train_loader, model, optimizer, epoch, args):
         del loss
 
 
-
 def validate(test_loader, model, args):
+    model.cuda()
     model.eval()
+    
+    # 유사도 계산을 위한 평가 도구 초기화
     image_embeddings = []
     audio_embeddings = []
     ids = []
+    evaluator = utils.Evaluator()
 
     # 데이터셋에서 이미지와 오디오 임베딩 추출
-    for step, (image, spec, _, name, _) in enumerate(test_loader):
-        if args.gpu is not None:
-            spec = spec.cuda(args.gpu, non_blocking=True)
-            image = image.cuda(args.gpu, non_blocking=True)
+    for step, (image, spec, _, name, _) in tqdm(enumerate(test_loader), desc="Embedding Extraction", total=len(test_loader)):
+        image, spec = image.cuda().float(), spec.cuda().float()
 
-        # 이미지 및 오디오 임베딩 생성
         with torch.no_grad():
             img_emb, aud_emb = model.extract_features(image, spec)
-        
-        image_embeddings.append(img_emb.cpu())
-        audio_embeddings.append(aud_emb.cpu())
+            
+            # 이미지와 오디오 임베딩이 4차원일 경우 평균 풀링 적용 (B x 512 x W x H -> B x 512)
+            if img_emb.dim() == 4:
+                img_emb = F.avg_pool2d(img_emb, kernel_size=(img_emb.size(2), img_emb.size(3))).squeeze()
+            if aud_emb.dim() == 4:
+                aud_emb = F.avg_pool2d(aud_emb, kernel_size=(aud_emb.size(2), aud_emb.size(3))).squeeze()
+
+        # 추출된 이미지와 오디오 임베딩 추가
+        image_embeddings.append(img_emb)
+        audio_embeddings.append(aud_emb)
         ids.extend(name)
 
-    # 임베딩 결합
+    # 텐서로 결합
     image_embeddings = torch.cat(image_embeddings, dim=0)
     audio_embeddings = torch.cat(audio_embeddings, dim=0)
 
-    # 유사도 행렬 계산
-    similarity_matrix = torch.mm(image_embeddings, audio_embeddings.T)
+    # 유사도 행렬 계산 (블록 단위)
+    similarity_matrix = torch.zeros(image_embeddings.size(0), audio_embeddings.size(0))
+    batch_size = 128
+    for i in range(0, image_embeddings.size(0), batch_size):
+        for j in range(0, audio_embeddings.size(0), batch_size):
+            img_batch = image_embeddings[i:i + batch_size].cuda()
+            aud_batch = audio_embeddings[j:j + batch_size].cuda()
+            similarity_matrix[i:i + batch_size, j:j + batch_size] = torch.mm(img_batch, aud_batch.T).cpu()
 
-    # Retrieval 성능 평가
-    retrieval_results = evaluate_retrieval(similarity_matrix, ids)
-    return retrieval_results
+    # GT 맵 설정 (같은 label이 있으면 1로 설정)
+    labels = load_labels()
+    gt_map = np.zeros_like(similarity_matrix)
+    for i, id1 in enumerate(ids):
+        for j, id2 in enumerate(ids):
+            if labels[id1] == labels[id2]:  # 같은 label이면 유사한 쌍으로 정의
+                gt_map[i, j] = 1
+
+    # cIoU 및 AUC 계산
+    for i in range(similarity_matrix.shape[0]):
+        # `pred`와 `gt_map[i]`을 1차원에서 224x224 크기로 변환
+        pred = similarity_matrix[i].cpu().view(1, 1, 15446, 1)
+        pred = F.interpolate(pred, size=(224, 224), mode='bicubic', align_corners=False).squeeze().numpy()
+        
+        gt_map_resized = torch.tensor(gt_map[i]).view(1, 1, 15446, 1)
+        gt_map_resized = F.interpolate(gt_map_resized, size=(224, 224), mode='nearest').squeeze().numpy()
+
+        thr = np.sort(pred.flatten())[int(pred.size / 2)]
+        evaluator.cal_CIOU(pred, gt_map_resized, thr)
+
+    # 최종 성능 평가
+    cIoU = evaluator.final()
+    AUC = evaluator.cal_AUC()
+    return cIoU, AUC
+
+
+
+
+# def validate(test_loader, model, args):
+#     model.cuda()
+#     model.eval()
+#     image_embeddings = []
+#     audio_embeddings = []
+#     ids = []
+
+#     from tqdm import tqdm
+#     # 데이터셋에서 이미지와 오디오 임베딩 추출
+#     for step, (image, spec, _, name, _) in tqdm(enumerate(test_loader)):
+        
+#         spec = spec.cuda().float()
+#         image = image.cuda().float()
+
+#         # 이미지 및 오디오 임베딩 생성
+#         with torch.no_grad():
+#             img_emb, aud_emb = model.extract_features(image, spec)
+            
+#             # 평균 풀링을 통해 B x 512 x W x H -> B x 512로 변환
+#             if img_emb.dim() == 4:  # B x 512 x W x H 형태일 경우
+#                 img_emb = F.avg_pool2d(img_emb, kernel_size=(img_emb.size(2), img_emb.size(3))).squeeze()
+#             if aud_emb.dim() == 4:
+#                 aud_emb = F.avg_pool2d(aud_emb, kernel_size=(aud_emb.size(2), aud_emb.size(3))).squeeze()
+
+#         # B x 512 형태로 변환된 임베딩을 사용
+#         image_embeddings.append(img_emb)
+#         audio_embeddings.append(aud_emb)
+#         ids.extend(name)
+
+#     # 텐서로 결합
+#     image_embeddings = torch.cat(image_embeddings, dim=0)
+#     audio_embeddings = torch.cat(audio_embeddings, dim=0)
+
+#     # 유사도 행렬 계산
+#     similarity_matrix = torch.mm(image_embeddings, audio_embeddings.T)
+
+#     # Retrieval 성능 평가
+#     retrieval_results = evaluate_retrieval(similarity_matrix, ids)
+#     print("여기까지 옴")
+#     return retrieval_results
+
+
+# def validate(test_loader, model, args):
+#     model.cuda()
+#     model.eval()
+#     image_embeddings = []
+#     audio_embeddings = []
+#     ids = []
+
+#     from tqdm import tqdm
+#     # 데이터셋에서 이미지와 오디오 임베딩 추출
+#     for step, (image, spec, _, name, _) in tqdm(enumerate(test_loader)):
+        
+#         spec = spec.cuda().float()
+#         image = image.cuda().float()
+
+#         # 이미지 및 오디오 임베딩 생성
+#         with torch.no_grad():
+#             img_emb, aud_emb = model.extract_features(image, spec)
+        
+#         # GPU 메모리 사용을 최소화하기 위해 CPU로 이동
+#         image_embeddings.append(img_emb)
+#         audio_embeddings.append(aud_emb)
+#         ids.extend(name)
+
+#     # CPU에서 텐서로 결합
+#     image_embeddings = torch.cat(image_embeddings, dim=0)
+#     audio_embeddings = torch.cat(audio_embeddings, dim=0)
+
+#     # 결합된 텐서를 2D로 변환
+#     image_embeddings = image_embeddings.view(image_embeddings.size(0), -1)
+#     audio_embeddings = audio_embeddings.view(audio_embeddings.size(0), -1)
+
+#     # 큰 유사도 행렬을 작은 블록으로 나눠 계산
+#     similarity_matrix = []
+#     batch_size = 1024  # 필요한 메모리 여유에 따라 조절
+    
+#     for i in range(0, image_embeddings.size(0), batch_size):
+#         # 배치 크기만큼 슬라이스하여 행렬 곱셈 수행
+#         img_batch = image_embeddings[i:i+batch_size]
+#         sim_batch = torch.mm(img_batch, audio_embeddings.T)  # CPU에서 연산 수행
+#         similarity_matrix.append(sim_batch)
+
+#     # 유사도 행렬을 다시 결합
+#     similarity_matrix = torch.cat(similarity_matrix, dim=0)
+
+#     # Retrieval 성능 평가
+#     retrieval_results = evaluate_retrieval(similarity_matrix, ids)
+#     print("여기까지 옴")
+#     return retrieval_results
+
 
 
 def evaluate_retrieval(similarity_matrix, ids):
@@ -272,6 +438,7 @@ def evaluate_retrieval(similarity_matrix, ids):
 
 
 class AverageMeter(object):
+    # 평균값을 계산하고 저장하는 도우미 class
     """Computes and stores the average and current value"""
     def __init__(self, name, fmt=':f'):
         self.name = name

@@ -20,9 +20,21 @@ import soundfile as sf
 class GetAudioVideoDataset(Dataset):
 
     def __init__(self, args, mode='train', transforms=None):
+        if mode == 'train':
+            # json_file = '/mnt/scratch/users/individuals/VGGsound_individual/metadata/train_a_third.json'
+            # data_path = '/mnt/scratch/users/individuals/VGGsound_individual/train'
+            json_file = '/mnt/scratch/users/sally/VGGsound_individual/metadata/train_practice.json'
+            data_path = '/mnt/scratch/users/sally/VGGsound_individual/train_practice'
+        else:
+            json_file = '/mnt/scratch/users/individuals/VGGsound_individual/metadata/test.json'
+            data_path = '/mnt/scratch/users/individuals/VGGsound_individual/test'
 
-        with open(args.json_file, 'r') as f:
+        with open(json_file, 'r') as f:
             self.data = json.load(f)['data']
+
+        self.audio_path = os.path.join(data_path, 'sample_audio')
+        self.video_path = os.path.join(data_path, 'sample_frames/frame_4')
+
         
         self.imgSize = args.image_size 
         self.mode = mode
@@ -67,10 +79,12 @@ class GetAudioVideoDataset(Dataset):
 
     def __getitem__(self, idx):
         # json file에서 audio & video path 가져오기
+        
         item = self.data[idx]
         video_id = item['video_id']
-        audio_path = f"/mnt/scratch/users/sally/VGGsound_individual/test/sample_audio/{video_id}.wav"
-        video_path = f"/mnt/scratch/users/sally/VGGsound_individual/test/sample_frames/frame_4/{video_id}.jpg"
+
+        audio_path = os.path.join(self.audio_path, f"{video_id}.wav")
+        video_path = os.path.join(self.video_path, f"{video_id}.jpg")
 
         # image load 및 전처리
         frame = self.img_transform(self._load_frame(video_path))
