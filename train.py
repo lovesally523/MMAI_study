@@ -170,11 +170,11 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # =============================================================== #
     # Training loop
-    cIoU, auc = validate(test_loader, model, args)
-    print(f'cIoU (epoch {start_epoch}): {cIoU}')
-    print(f'AUC (epoch {start_epoch}): {auc}')
-    print(f'best_cIoU: {best_cIoU}')
-    print(f'best_Auc: {best_Auc}')
+    # cIoU, auc = validate(test_loader, model, args)
+    # print(f'cIoU (epoch {start_epoch}): {cIoU}')
+    # print(f'AUC (epoch {start_epoch}): {auc}')
+    # print(f'best_cIoU: {best_cIoU}')
+    # print(f'best_Auc: {best_Auc}')
 
     for epoch in range(start_epoch, args.epochs):
         if args.multiprocessing_distributed:
@@ -218,6 +218,7 @@ def load_labels():
 
 
 def train(train_loader, model, optimizer, epoch, args):
+    print("train 들어옴")
     model.train()
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -238,10 +239,18 @@ def train(train_loader, model, optimizer, epoch, args):
         image = image.cuda()
 
         image_emb, audio_emb = model.extract_features(image, spec)
+        
+        print("Image Emb requires_grad:", image_emb.requires_grad)
+        print("Audio Emb requires_grad:", audio_emb.requires_grad)
+
         similarity_matrix = torch.mm(image_emb, audio_emb.T)
+
+        print("Similarity Matrix grad_fn:", similarity_matrix.grad_fn)  
 
         labels = torch.arange(similarity_matrix.size(0)).long().cuda()
         loss = F.cross_entropy(similarity_matrix, labels)
+        print("Loss grad_fn:", loss.grad_fn)  # None이 아니어야 함
+
         
         loss_mtr.update(loss.item(), image.shape[0])
 

@@ -22,6 +22,9 @@ class AVENet(nn.Module):
         # -----------------------------------------------
         self.imgnet = base_models.resnet18(modal='vision', pretrained=True)
         self.audnet = base_models.resnet18(modal='audio')
+        self.imgnet = self.imgnet.cuda()
+        self.audnet = self.audnet.cuda()
+
         self.m = nn.Sigmoid()
         self.avgpool = nn.AdaptiveMaxPool2d((1, 1))
 
@@ -84,18 +87,18 @@ class AVENet(nn.Module):
         """
         Returns intermediate image and audio features without calculating logits or other outputs.
         """
-        with torch.no_grad():
+        # with torch.no_grad():
             # Extract features from image and audio networks
-            image = image.float()
-            audio = audio.float()
+        image = image.float().cuda() # 여기 뒤에 cuda() 붙이는거 우선 보류
+        audio = audio.float().cuda()
 
-            image_feature = self.imgnet(image)  # Intermediate image features
-            audio_feature = self.audnet(audio)  # Intermediate audio features
-            
-            # Normalize the features if needed
-            image_feature = self.avgpool(image_feature).view(image_feature.size(0), -1)
-            image_feature = nn.functional.normalize(image_feature, dim=1)
-            audio_feature = self.avgpool(audio_feature).view(audio_feature.size(0), -1)
-            audio_feature = nn.functional.normalize(audio_feature, dim=1)
+        image_feature = self.imgnet(image)  # Intermediate image features
+        audio_feature = self.audnet(audio)  # Intermediate audio features
+        
+        # Normalize the features if needed
+        image_feature = self.avgpool(image_feature).view(image_feature.size(0), -1)
+        image_feature = nn.functional.normalize(image_feature, dim=1)
+        audio_feature = self.avgpool(audio_feature).view(audio_feature.size(0), -1)
+        audio_feature = nn.functional.normalize(audio_feature, dim=1)
 
         return image_feature, audio_feature
